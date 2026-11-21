@@ -1,0 +1,25 @@
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 日志与临时文件
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# 依赖（本作无需构建，正常不会有）
+node_modules/
+package-lock.json
+
+# 本地截图/调试产物
+shots/_tmp/
+*.tmp
+
+# 保留：vendor/three.min.js —— 游戏运行必需，必须提交
