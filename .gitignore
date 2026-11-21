@@ -23,3 +23,10 @@ shots/_tmp/
 *.tmp
 
 # 保留：vendor/three.min.js —— 游戏运行必需，必须提交
+
+# 一次性工具脚本
+compress-shots.py
+fix-refs.js
+
+# 上传用的临时压缩包
+*.zip

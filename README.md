@@ -5,7 +5,7 @@
 ![环带视角](shots/scene-ring-plane.jpg)
 ![星环厚度](shots/scene-ring-thickness.jpg)
 ![环带小行星](shots/scene-asteroids.jpg)
-![轨道视角](shots/scene-orbit.png)
+![轨道视角](shots/scene-orbit.jpg)
 
 ## 在线试玩
 
@@ -139,9 +139,9 @@ node server.js 8123
 
 ## 跃迁：星轨拉线 → 爆闪 → 另一个世界
 
-![碎星带](shots/scene-belt.png)
-![蓝星](shots/scene-earth.png)
-![深渊](shots/scene-blackhole.png)
+![碎星带](shots/scene-belt.jpg)
+![蓝星](shots/scene-earth.jpg)
+![深渊](shots/scene-blackhole.jpg)
 
 按 T（或 M）打开**目的地选择菜单**，点选即可跃迁；也可以直接按数字键 1–4 切换。
 
@@ -284,7 +284,7 @@ http://127.0.0.1:8123/index.html?debug=1&selftest=1
 http://127.0.0.1:8123/index.html?debug=1&fps=1
 ```
 
-当前自检 **72 / 72 全部通过**（见 [shots/selftest.png](shots/selftest.png)）：
+当前自检 **72 / 72 全部通过**（见 [shots/selftest.jpg](shots/selftest.jpg)）：
 
 ```
 PASS W 前进 :: 移动 31.32 单位
