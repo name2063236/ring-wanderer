@@ -7,6 +7,20 @@
 ![环带小行星](shots/scene-asteroids.jpg)
 ![轨道视角](shots/scene-orbit.png)
 
+## 在线试玩
+
+发布到 GitHub Pages 后，点链接即可直接游玩，无需下载或安装：
+
+```
+https://<你的用户名>.github.io/ring-wanderer/
+```
+
+发布步骤见 **[DEPLOY.md](DEPLOY.md)**，或直接运行：
+
+```powershell
+.\deploy.ps1 -User <你的用户名>
+```
+
 ## 运行
 
 直接双击 `index.html` 即可（three.js 已内置在 `vendor/`，无需联网）。
