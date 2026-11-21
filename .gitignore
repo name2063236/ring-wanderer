@@ -30,3 +30,6 @@ fix-refs.js
 
 # 上传用的临时压缩包
 *.zip
+
+# 本地开发辅助（不属于项目内容）
+push-retry.ps1

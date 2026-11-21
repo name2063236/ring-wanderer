@@ -9,28 +9,11 @@
 
 ## 在线试玩
 
-发布到 GitHub Pages 后，点链接即可直接游玩，无需下载或安装：
+**https://name2063236.github.io/ring-wanderer/**
 
-```
-https://<你的用户名>.github.io/ring-wanderer/
-```
+打开即玩，无需下载或安装。
 
-发布步骤见 **[DEPLOY.md](DEPLOY.md)**，或直接运行：
-
-```powershell
-.\deploy.ps1 -User <你的用户名>
-```
-
-## 运行
-
-直接双击 `index.html` 即可（three.js 已内置在 `vendor/`，无需联网）。
-
-如需本地服务器（推荐，避免个别浏览器对 `file://` 的限制）：
-
-```powershell
-node server.js 8123
-# 打开 http://127.0.0.1:8123
-```
+> 也可以下载后直接双击 `index.html` 运行（three.js 已内置，无需联网）。
 
 ## 操作
 
