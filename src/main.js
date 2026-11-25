@@ -307,6 +307,12 @@
     w.group.visible = false; // 初始不显示，跃迁后才出场
     w.group.position.set(0, 0, 0);
     scene.add(w.group);
+
+    // 黑洞需要星空贴图来做引力透镜（把背景星星拉成弧）
+    if (def.id === 'blackhole' && typeof w.setSkyTexture === 'function') {
+      w.setSkyTexture(skyData.tex);
+    }
+
     otherWorlds[def.id] = w;
   }
 
@@ -404,12 +410,20 @@
         }
 
         // 相机拉回合适的观察距离（不同世界尺度不同）
-        const distMul =
-          worldId === 'blackhole' ? 6.2 : worldId === 'belt' ? 3.8 : 3.2;
-        camera.position
-          .copy(new THREE.Vector3(-0.8, 0.37, -0.46).normalize())
-          .multiplyScalar(distMul * R);
-        player.lookAt(new THREE.Vector3(0, 0, 0));
+        if (worldId === 'blackhole' && target.camOffset && target.camDistMul) {
+          // 黑洞用自己推荐的机位：低仰角，接近侧视，才看得到盘的环绕拱弧
+          camera.position
+            .copy(target.camOffset)
+            .multiplyScalar(target.camDistMul * R);
+          // 视线略高于盘面中心，让黑球位于画面中央偏上
+          player.lookAt(new THREE.Vector3(0, R * 0.02, 0));
+        } else {
+          const distMul = worldId === 'belt' ? 3.8 : 3.2;
+          camera.position
+            .copy(new THREE.Vector3(-0.8, 0.37, -0.46).normalize())
+            .multiplyScalar(distMul * R);
+          player.lookAt(new THREE.Vector3(0, 0, 0));
+        }
       } else {
         // 目标是土星：恢复主场景
         saturn.system.visible = true;
@@ -1663,7 +1677,27 @@
       for (let i = 0; i < 600 && warp.active; i++) warp.update(1 / 60, i / 60);
       const bh = otherWorlds.blackhole;
       check('可跃迁到黑洞', bh && bh.group.visible === true, currentWorldId);
-      check('黑洞有吸积盘与视界', !!(bh && bh.disk && bh.horizon));
+      check('黑洞已构建', !!bh);
+      check('黑洞使用光线追踪', !!(bh && bh.disk && bh.disk.isVolumetric));
+      check('黑洞已接入星空贴图', !!(bh && bh.setSkyTexture));
+
+      // 光线追踪黑洞的核心：盘必须环绕包围视界，而不是贴片
+      {
+        // 相机放在推荐机位，更新一帧，检查 uniform 是否被正确驱动
+        camera.position.copy(bh.camOffset).multiplyScalar(bh.camDistMul * R);
+        player.lookAt(new THREE.Vector3(0, 0, 0));
+        bh.update(1 / 60, 5, camera);
+        const lensingMesh = bh.group.getObjectByName('bhLensing');
+        check('黑洞透镜画布存在', !!lensingMesh);
+        // 画布必须铺满视锥，否则盘会被方形边界切断
+        const sw = lensingMesh.scale.x;
+        const sh = lensingMesh.scale.y;
+        // 画布宽高比必须等于相机宽高比，否则盘会被拉伸
+        const ratio = sw / sh;
+        const okRatio = Math.abs(ratio - camera.aspect) < 0.02;
+        check('透镜画布匹配视锥宽高比', okRatio,
+          `画布 ${ratio.toFixed(3)} vs 相机 ${camera.aspect.toFixed(3)}`);
+      }
 
       // 切回土星
       warp.start('saturn');
