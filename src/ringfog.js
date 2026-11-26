@@ -223,11 +223,21 @@
       return true;
     }
 
+    /** 离开土星世界时调用：把雾与冰粒彻底复位 */
+    function hide() {
+      state.density = 0;
+      state.raw = 0;
+      state.inRing = false;
+      fogMat.uniforms.uDensity.value = 0;
+      motes.material.uniforms.uDensity.value = 0;
+    }
+
     return {
       state,
       motes,
       update,
       composite,
+      hide,
       get density() {
         return state.density;
       },

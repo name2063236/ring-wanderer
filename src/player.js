@@ -27,6 +27,8 @@
       rollTotal: 0, // 累计滚转弧度（不取模，仅用于自检 / HUD）
       pendingDx: 0, // 本帧待处理的鼠标增量
       pendingDy: 0,
+      carryDx: 0, // 超出单帧上限、留到下一帧继续消耗的余量
+      carryDy: 0,
       spikeDrops: 0, // 被判定为异常尖峰而丢弃的事件数（诊断用）
       spikeGuard: true, // 是否启用尖峰防护（设置面板可关）
       keys: Object.create(null),
@@ -137,9 +139,9 @@
      *   - 超过 MAX_EVENT：限幅到上限
      * 再对"每帧累计"设一个宽松上限，避免多事件叠加成一次瞬移。
      */
-    const MAX_EVENT = 250; // 单个事件允许的最大像素位移
-    const DROP_EVENT = 600; // 超过此值的单事件判为异常，直接丢弃
-    const MAX_PER_FRAME = 900; // 一帧内累计位移的上限（正常快速甩动远低于此值）
+    const MAX_EVENT = 220; // 单个事件允许的最大像素位移
+    const DROP_EVENT = 480; // 超过此值的单事件判为异常，直接丢弃
+    const MAX_PER_FRAME = 380; // 单帧位移上限（约 34°，覆盖正常快甩；超出的直接丢弃）
 
     function applyLook(dx, dy) {
       // 设置面板可关闭尖峰防护（用于对比 / 排错）
@@ -166,25 +168,43 @@
       state.pendingDy += dy;
     }
 
-    function flushLook() {
-      let dx = state.pendingDx;
-      let dy = state.pendingDy;
+    function flushLook(dt) {
+      const totalX = state.pendingDx;
+      const totalY = state.pendingDy;
       state.pendingDx = 0;
       state.pendingDy = 0;
 
-      // 每帧累计上限（防止多个事件叠加成瞬移）
+      /* ---- 关键修复：超限即丢弃，不再顺延到后续帧 ----
+
+         之前的"余量顺延"是跳变的主因：
+         一帧内积压 2000px 时，本帧只施加 420px，
+         剩下的 1580px 排到后续帧继续消耗 ——
+         结果是**鼠标已经停了，画面还在自己转**，
+         手感上就是"视角突然甩出去一大截"。
+         现在超出的部分直接丢弃：宁可极端快甩损失一点行程，
+         也绝不允许输入延迟到下一帧。 */
+
+      /* 异常长帧（切世界、编译着色器、系统卡顿）：
+         这一帧的累积位移全部作废。
+         否则卡顿结束后会把积压的几百像素一次性释放，
+         表现为"卡一下之后视角猛跳"。 */
+      if (dt > 0.15) return;
+
+      let dx = totalX;
+      let dy = totalY;
+
       if (state.spikeGuard) {
-        if (dx > MAX_PER_FRAME) dx = MAX_PER_FRAME;
-        else if (dx < -MAX_PER_FRAME) dx = -MAX_PER_FRAME;
-        if (dy > MAX_PER_FRAME) dy = MAX_PER_FRAME;
-        else if (dy < -MAX_PER_FRAME) dy = -MAX_PER_FRAME;
+        const cap = MAX_PER_FRAME;
+        if (dx > cap) dx = cap;
+        else if (dx < -cap) dx = -cap;
+        if (dy > cap) dy = cap;
+        else if (dy < -cap) dy = -cap;
       }
 
       const s = state.sensitivity;
-      if (dx) rotateLocal(AXIS_Y, -dx * s); // 横向拖动 -> 绕机体上轴
-      if (dy) rotateLocal(AXIS_X, -dy * s); // 纵向拖动 -> 绕机体右轴
+      if (dx) rotateLocal(AXIS_Y, -dx * s);
+      if (dy) rotateLocal(AXIS_X, -dy * s);
     }
-
     function onMouseMove(e) {
       if (!state.locked) return;
       applyLook(e.movementX || 0, e.movementY || 0);
@@ -198,6 +218,8 @@
       // 丢弃暂停期间积累的鼠标位移，避免重新锁定时视角突然跳走
       state.pendingDx = 0;
       state.pendingDy = 0;
+      state.carryDx = 0;
+      state.carryDy = 0;
       if (!locked) {
         state.keys = Object.create(null);
         state.boosting = false;
@@ -234,7 +256,7 @@
       const active = state.enabled;
 
       // 先把本帧累积的鼠标位移以"限幅后"的方式施加到姿态上
-      flushLook();
+      flushLook(dt);
 
       // 滚转：绕机体视轴，无角度上限（Q 向右倾，E 向左倾）
       const rollInput = (k['KeyQ'] ? 1 : 0) - (k['KeyE'] ? 1 : 0);

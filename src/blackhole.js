@@ -131,20 +131,29 @@
         if (r < 1.0) { absorbed = 1.0; break; }
 
         /* 逃逸判定：已经走远且正在远离 */
-        if (r > 42.0 && dot(p, v) > 0.0) break;
+        if (r > 34.0 && dot(p, v) > 0.0) break;
 
-        /* 自适应步长：靠近黑洞时更细，保证盘面与光子环的精度 */
-        float dt = clamp(r * 0.030, 0.008, 0.55);
-
-        /* 进入盘所在半径范围时进一步细分，否则细丝纹理会被平均掉 */
+        /* ---------- 自适应步长 ----------
+           三档连续混合：视界附近最细、盘内次之、远场最粗。
+           盘内必须足够细 —— 之前 0.11 的步长会让掠射视线在盘里
+           只穿过十几步，单步贡献接近饱和，画面出现亮度台阶、
+           内缘过曝成纯白。细化到 0.030 后过渡自然。 */
         float rr0 = length(p.xz);
-        if (rr0 > uDiskIn * 0.85 && rr0 < uDiskOut * 1.1) {
-          dt = min(dt, 0.11);
-        }
+        float inRadial = smoothstep(uDiskIn * 0.80, uDiskIn * 0.98, rr0)
+                       * (1.0 - smoothstep(uDiskOut * 0.96, uDiskOut * 1.16, rr0));
+        float planeNear = 1.0 - smoothstep(0.04, 0.90, abs(p.y));
+        float diskW = inRadial * planeNear;
+
+        float dtFar = clamp(r * 0.075, 0.20, 1.8);
+        float dtDisk = 0.014;
+        float dtHorizon = 0.045;
+
+        float dt = mix(dtFar, dtDisk, diskW);
+        dt = min(dt, mix(dtFar, dtHorizon, 1.0 - smoothstep(2.4, 7.0, r)));
 
         /* ---------- 吸积盘：体积采样 ---------- */
         float rr = length(p.xz);
-        if (rr > uDiskIn * 0.88 && rr < uDiskOut * 1.06) {
+        if (rr > uDiskIn && rr < uDiskOut * 1.04) {
           /* 盘的半厚度：外圈更厚（薄雾感），内圈极薄 */
           float t01 = clamp((rr - uDiskIn) / (uDiskOut - uDiskIn), 0.0, 1.0);
           float hgt = 0.030 + 0.16 * pow(t01, 1.8);
@@ -152,8 +161,13 @@
           float vert = exp(-(p.y * p.y) / (hgt * hgt));
           if (vert > 0.004) {
             /* 径向包络：内缘陡起，外缘缓慢消失 */
-            float edge = smoothstep(0.0, 0.045, t01)
-                       * (1.0 - smoothstep(0.45, 1.0, t01));
+            /* 内缘必须平滑归零。
+               原来用 smoothstep(0.0, ...) 在 t01=0 处仍有非零值，
+               加上 clamp 把外部的点也映到 t01=0，就会在阴影边缘
+               画出一圈白热的细线。改为先排除小数、再平滑上升。 */
+            float inner = smoothstep(0.004, 0.085, t01);
+            float outer = 1.0 - smoothstep(0.55, 1.0, t01);
+            float edge = inner * outer;
 
             /* 开普勒差动 + 湍流细丝 */
             float ang = atan(p.z, p.x);
@@ -163,23 +177,47 @@
             float turb = fbm2(vec2(ph * 3.4, rr * 1.35));
             float fila = fbm2(vec2(ph * 13.0, rr * 4.6));
             float fine = fbm2(vec2(ph * 34.0, rr * 11.0));
-            float dens = edge * vert * (0.40 + 0.78 * turb) * (0.70 + 0.52 * fila) * (0.82 + 0.32 * fine);
+            /* 径向层纹：多层叠加，形成细密的丝带结构。
+               参考图里盘面有明显的同心流线，单层太单调。 */
+            float ringA = 0.5 + 0.5 * sin(rr * 21.0 + fila * 9.0);
+            float ringB = 0.5 + 0.5 * sin(rr * 47.0 + turb * 11.0);
+            float ringC = 0.5 + 0.5 * sin(rr * 96.0 + fine * 14.0);
+
+            /* 锐化：指数越高，亮带越窄、边缘越利 */
+            ringA = pow(clamp(ringA, 0.0, 1.0), 2.6);
+            ringB = pow(clamp(ringB, 0.0, 1.0), 3.4);
+            ringC = pow(clamp(ringC, 0.0, 1.0), 4.0);
+
+            /* 对比加大：亮带更亮、暗隙更暗，线条因此更分明 */
+            float ringMod = mix(0.50, 1.55, ringA) * mix(0.70, 1.42, ringB)
+                          * mix(0.76, 1.28, ringC);
+
+            /* 三项都拉开对比，细节更硬朗 */
+            float dens = edge * vert * (0.40 + 1.00 * turb) * (0.62 + 0.72 * fila)
+                       * (0.70 + 0.50 * fine) * ringMod;
 
             /* 温度随半径下降：内白热 → 橙 → 暗红 */
-            vec3 em = mix(uDiskHot, uDiskMid, smoothstep(0.0, 0.11, t01));
-            em = mix(em, uDiskCool, smoothstep(0.13, 0.72, t01));
+            /* 温度分层压紧到内缘：白热只占最里面一小圈，
+               往外迅速进入金橙、再进入橙红，避免大片发白。 */
+            vec3 em = mix(uDiskHot, uDiskMid, smoothstep(0.0, 0.10, t01));
+            em = mix(em, uDiskCool, smoothstep(0.22, 0.85, t01));
 
             /* 内缘额外增亮（最内稳定圆轨道附近温度最高） */
-            em *= 1.0 + 3.4 * exp(-t01 * 22.0);
+            em *= 1.0 + 2.0 * exp(-t01 * 40.0) * inner;
 
             /* 光学厚度：越靠内越不透明，形成自遮挡 */
+            /* 用 1-exp 形式：单步贡献随 sigma*dt 平滑饱和，
+               避免"单步太亮"造成的硬边和过曝。 */
             float sigma = dens * 3.1;
-            vec3 contrib = em * sigma * dt * uBright;
+            float absStep = 1.0 - exp(-sigma * dt * 0.85);
 
-            accum += contrib * transmittance;
+            accum += em * absStep * uBright * transmittance;
             transmittance *= exp(-sigma * dt * 0.55);
           }
         }
+
+        /* 不透明度已饱和，后续采样不可见，提前结束 */
+        if (transmittance < 0.02) break;
 
         /* ---------- 引力加速度（光子测地线）---------- */
         vec3 a = -1.5 * h2 * p / (r2 * r2 * r);
@@ -196,19 +234,52 @@
         } else {
           skyCol = procStars(dir);
         }
-        /* 靠近黑洞的方向略微拉亮，模拟强透镜区的星流 */
-        float prox = pow(clamp(dot(normalize(ro), dir), 0.0, 1.0), 60.0);
-        skyCol *= 1.0 + prox * 0.6;
+        /* 背景整体提亮：吸积盘很亮，若背景用同一曝光会被压死，
+           就看不出星空被引力弯折的形状了。 */
+        skyCol *= 1.45;
+
+        /* 黑洞附近再额外收束一点，让透镜区更醒目。
+           注意这里系数不能大 —— 光子环本身就是采样背景天空形成的，
+           prox 叠太多会把环烧成一圈粗白线。 */
+        float prox = pow(clamp(dot(normalize(ro), dir), 0.0, 1.0), 34.0);
+        skyCol *= 1.0 + prox * 0.55;
+
+        /* 高亮压缩：提亮后密集星点会结块成白团，
+           用一条柔和的上限把最亮处压回来，保持星点颗粒感。 */
+        float skyLuma = dot(skyCol, vec3(0.2126, 0.7152, 0.0722));
+        skyCol *= 1.0 / (1.0 + skyLuma * 0.55);
       }
 
       vec3 col = accum + skyCol * transmittance * (1.0 - absorbed);
 
-      /* 柔和的胶片式饱和，避免高光死白一片 */
-      col = 1.0 - exp(-col * 1.05);
+      /* ---------- 电影感调色 ---------- */
+      /* HDR 压缩：抬高曝光让盘更有存在感 */
+      col = 1.0 - exp(-col * 1.42);
 
-      /* 暗角：把注意力收拢到黑洞本身 */
-      float vig = 1.0 - 0.50 * pow(length(vWorldPos - uCamPos) / max(uHalf, 1.0), 2.0);
-      col *= clamp(vig, 0.35, 1.0);
+      /* S 曲线：压暗暗部、抬起亮部，层次更硬朗 */
+      vec3 c2 = clamp(col, 0.0, 1.0);
+      c2 = c2 * c2 * (3.0 - 2.0 * c2);
+      col = mix(c2, c2 * c2, 0.26);
+
+      /* 暖色偏移：金橙感 */
+      col.r *= 1.00;
+      col.g *= 1.01;
+      col.b *= 1.01;
+
+      /* 极亮处推向白金，形成内缘"白热" */
+      float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
+      col = mix(col, vec3(luma) * vec3(1.0, 0.97, 0.90), smoothstep(0.86, 1.0, luma) * 0.38);
+
+      /* 饱和度 */
+      float gray = dot(col, vec3(0.2126, 0.7152, 0.0722));
+      col = mix(vec3(gray), col, 1.16);
+
+      col *= 1.02;
+
+      /* 暗角：减弱到 0.26，让四角的背景星空也能看见，
+         否则透镜扭曲的效果在画面边缘被切掉。 */
+      float vig = 1.0 - 0.26 * pow(length(vWorldPos - uCamPos) / max(uHalf, 1.0), 2.0);
+      col *= clamp(vig, 0.40, 1.0);
 
       /* 这个 quad 铺满整个屏幕，内部自己采样星空，
          所以不需要边缘淡出——淡化反而会和背后的天空球重影。 */
@@ -223,10 +294,10 @@
 
     /* 视界半径：明显放大。相机距离约 9.5 rs 时，
        阴影（视觉半径 2.6 rs）约占画面宽度的 1/3。 */
-    const rs = R * 0.55;
+    const rs = R * 0.86;
 
-    const diskIn = 2.7;
-    const diskOut = 7.2;
+    const diskIn = 2.55;
+    const diskOut = 13.0;
 
     const uniforms = {
       uCamPos: { value: new THREE.Vector3() },
@@ -235,13 +306,13 @@
       uDiskIn: { value: diskIn },
       uDiskOut: { value: diskOut },
       uTime: { value: 0 },
-      uBright: { value: 1.6 },
+      uBright: { value: 3.0 },
       uHalf: { value: rs * 17.0 },
       uSky: { value: null },
       uHasSky: { value: 0 },
-      uDiskHot: { value: new THREE.Color(1.0, 0.96, 0.90) },
-      uDiskMid: { value: new THREE.Color(1.0, 0.58, 0.20) },
-      uDiskCool: { value: new THREE.Color(0.72, 0.16, 0.04) },
+      uDiskHot: { value: new THREE.Color(1.0, 0.97, 0.88) },
+      uDiskMid: { value: new THREE.Color(1.0, 0.76, 0.30) },
+      uDiskCool: { value: new THREE.Color(0.86, 0.40, 0.07) },
       uTanX: { value: 0.5 },
       uTanY: { value: 0.35 },
     };
@@ -277,8 +348,10 @@
       def: { id: 'blackhole', name: '深渊', subtitle: '引力透镜与吸积盘' },
 
       /* 供 main.js 使用：推荐机位（低仰角，接近侧视） */
-      camOffset: new THREE.Vector3(-0.92, 0.10, -0.38).normalize(),
-      camDistMul: 7.4,
+      /* 出生机位：低仰角（约 8°），悬在盘面上方不远处。
+         脚下能看到盘面向外铺展，同时完整看到黑洞与上下拱弧。 */
+      camOffset: new THREE.Vector3(-0.9160, 0.1175, -0.3837).normalize(),
+      camDistMul: 6.88,
 
       sunDir,
       rs,

@@ -292,7 +292,11 @@
     group.name = 'world_earth';
 
     const r = R * 0.92;
-    const sunDir = new THREE.Vector3(0.72, 0.22, 0.66).normalize();
+    /* 太阳方向经过反解：配合下方 camOffset，使晨昏线在画面里倾斜约 42 度，
+       且相机位于亮面一侧（dot(cam,sun) ≈ 0.28） */
+    /* 太阳方向与下方 camOffset 联合反解：
+       使晨昏线在画面里倾斜约 43°，且相机位于亮面一侧。 */
+    const sunDir = new THREE.Vector3(0.358, 0.713, -0.603).normalize();
 
     /* ---------- 地表 ---------- */
     const groundMat = new THREE.ShaderMaterial({
@@ -362,15 +366,21 @@
           /* ---------- 海洋 ---------- */
           // 深度由高度决定
           float depth = clamp((SEA - h) * 5.0, 0.0, 1.0);
-          vec3 shallow = vec3(0.055, 0.26, 0.34);
-          vec3 deep = vec3(0.006, 0.045, 0.14);
+          /* 海洋配色：真实海水是很深的蓝，只有浅滩才偏青。
+             之前的 shallow 偏灰青（0.055,0.26,0.34），
+             乘上曝光后就成了灰白的一片。 */
+          vec3 shallow = vec3(0.035, 0.145, 0.245);
+          vec3 deep = vec3(0.004, 0.028, 0.095);
           vec3 ocean = mix(shallow, deep, depth);
           // 极地海洋偏冷
           ocean = mix(ocean, vec3(0.10, 0.22, 0.30), smoothstep(0.6, 0.95, alat) * 0.5);
 
           /* ---------- 陆地：按纬度分生物群区 ---------- */
           // 高度归一化
-          float elev = clamp((h - SEA) * 4.0, 0.0, 1.0);
+          /* 高度归一化：原来的 *4.0 让绝大多数陆地都被判为"高海拔"，
+     直接触发积雪，形成一大片灰白斑。改为 *1.9，
+     只让真正的高原/山脉区域变灰。 */
+          float elev = clamp((h - SEA) * 1.9, 0.0, 1.0);
 
           // 沙漠带（副热带 ~15~30 度）：用噪声决定哪里真的干
           float desertBand = exp(-pow((alat - 0.34) / 0.16, 2.0));
@@ -407,9 +417,9 @@
           land = mix(land, cForest, tropic * 0.35);
 
           // 高海拔：岩石 -> 积雪
-          float rock = smoothstep(0.45, 0.70, elev);
+          float rock = smoothstep(0.62, 0.86, elev);
           land = mix(land, cRock, rock);
-          land = mix(land, cSnow, smoothstep(0.72, 0.90, elev));
+          land = mix(land, cSnow, smoothstep(0.88, 0.99, elev) * 0.85);
 
           // 极冠（两极）
           float ice = smoothstep(0.86, 0.965, alat) * (0.75 + 0.25 * (fbm3(n * 9.0, 3) * 0.5 + 0.5));
@@ -420,15 +430,23 @@
 
           /* ---------- 光照 ---------- */
           float ndl = dot(N, L);
-          float day = smoothstep(-0.10, 0.30, ndl);
+          float day = smoothstep(-0.030, 0.055, ndl);
 
-          vec3 col = base * uSunColor * max(ndl, 0.0) * 1.5;
+          /* 漫反射：用 ndl 的柔和抬升，避免夜面过渡太生硬，
+             同时保证亮面足够明亮 */
+          float lambert = pow(max(ndl, 0.0), 0.85);
+          vec3 col = base * uSunColor * lambert * 1.85;
 
           // 海洋镜面高光（太阳耀斑）
+          // 之前的指数 120 + 强度 1.6 会在海面烧出一块纯白斑，
+          // 改为更宽、更弱的反射，接近真实海面的柔和耀斑
           if (landness < 0.5) {
             vec3 H = normalize(L + V);
-            float spec = pow(max(dot(N, H), 0.0), 120.0);
-            col += uSunColor * spec * 1.6 * (1.0 - landness * 2.0);
+            /* 真实的太阳耀斑是一个很小的亮点。
+               指数 900 让它足够集中；同时乘 ndl，
+               保证背光侧不会凭空发亮。 */
+            float spec = pow(max(dot(N, H), 0.0), 900.0);
+            col += uSunColor * spec * 0.55 * (1.0 - landness * 2.0) * max(ndl, 0.0);
           }
 
           // 夜面：城市灯光（只在陆地、中低纬、靠近海岸密度更高）
@@ -439,7 +457,8 @@
           col += vec3(1.0, 0.74, 0.34) * cities * (1.0 - day) * 1.4;
 
           // 夜面反照
-          col += base * vec3(0.016, 0.022, 0.040) * (1.0 - day);
+          col *= mix(0.06, 1.0, day);
+          col += base * vec3(0.010, 0.014, 0.026) * (1.0 - day);
 
           gl_FragColor = vec4(col, 1.0);
         }
@@ -498,9 +517,7 @@
           float subtrop = exp(-pow((alat - 0.30) / 0.10, 2.0));
           float midlat = exp(-pow((alat - 0.57) / 0.13, 2.0));
 
-          float bandBias = itcz * 0.55 + midlat * 0.42 - subtrop * 0.42;
-
-          /* 云块：域扭曲 FBM */
+          /* 云块：域扭曲 FBM（多尺度） */
           vec3 p = n * 4.2;
           vec3 w = vec3(
             fbm3(p * 0.9, 3),
@@ -508,8 +525,10 @@
             fbm3(p * 0.9 - 2.7, 3)
           );
           float c = fbm3(p * 1.8 + w * 1.4, 6) * 0.5 + 0.5;
-          // 细丝
           float filaments = fbm3(p * 6.0 + w * 2.2, 4) * 0.5 + 0.5;
+
+          /* 中尺度团块：决定"哪里有云簇"，而不是整条连续的带 */
+          float clumps = fbm3(n * 9.5 + w * 3.0, 4) * 0.5 + 0.5;
 
           /* 中纬度气旋：螺旋结构 */
           float ang = atan(n.z, n.x);
@@ -521,20 +540,37 @@
           ), 5) * 0.5 + 0.5;
           float cycloneMask = midlat * smoothstep(0.52, 0.78, cyclone);
 
-          float dens = c * 0.72 + filaments * 0.16 + bandBias + cycloneMask * 0.32;
-          dens = smoothstep(0.50, 0.78, dens);
+          /* 关键改动：纬度带不再作为"加性偏置"，
+             而是改成一个**稀疏度因子**，去调制云的团块密度。
+             原来的写法会让赤道出现一条连续白练；
+             现在带内仍然是破碎的云簇，只是更密集。 */
+          float bandBias = itcz * 0.42 + midlat * 0.34 - subtrop * 0.34;
 
-          // 极区云被拉成条带
-          dens *= mix(1.0, 0.55, smoothstep(0.82, 0.98, alat));
+          /* 基础云量 */
+          /* 基础云量：从 0.78 降到 0.60，避免整片糊住地表 */
+          float base = c * 0.60 + filaments * 0.10;
+
+          /* 用团块噪声做"门控"：只有团块足够密的地方才成云 */
+          float clumpGate = smoothstep(0.40, 0.78, clumps + bandBias * 0.45);
+
+          float dens = base * clumpGate + cycloneMask * 0.30;
+
+          /* 稀疏化边缘，避免整片均匀发白 */
+          dens *= mix(0.55, 1.0, smoothstep(0.30, 0.62, clumps));
+
+          dens = smoothstep(0.48, 0.80, dens);
+
+          // 极区云被拉成条带且更稀
+          dens *= mix(1.0, 0.42, smoothstep(0.78, 0.98, alat));
 
           if (dens < 0.01) discard;
 
           float ndl = dot(N, L);
           float day = smoothstep(-0.08, 0.28, ndl);
-          vec3 col = vec3(0.97, 0.98, 1.0) * uSunColor * max(ndl, 0.0) * 1.55;
+          vec3 col = vec3(0.97, 0.98, 1.0) * uSunColor * max(ndl, 0.0) * 1.80;
           col += vec3(0.035, 0.05, 0.09) * (1.0 - day);
 
-          gl_FragColor = vec4(col, dens * 0.94);
+          gl_FragColor = vec4(col, dens * 0.72);
         }
       `,
       transparent: true,
@@ -578,13 +614,21 @@
           vec3 L = normalize(uLightDir);
 
           // 边缘光：视线越接近切线越亮
-          float rim = pow(1.0 - abs(dot(V, N)), 4.0);
+          float rim = pow(1.0 - abs(dot(V, N)), 6.0);
           // 受光侧
           float lit = smoothstep(-0.50, 0.60, dot(N, L));
           // 条纹细节，避免纯色
           float streak = fbm3(vObj * 6.0, 3) * 0.5 + 0.5;
 
-          float a = rim * lit * (0.55 + 0.45 * streak) * 1.1;
+          /* 只在真正的边缘发光：rim 的指数提高到 5，
+             并且乘一个"靠近轮廓"的额外权重，
+             避免大气壳在球面中央叠加成一层灰雾 */
+          /* 只在极窄的轮廓带（ndv < 0.12）发光。
+             之前的 0.34 太宽，导致球面中部也被覆盖，
+             叠加成一层灰雾。 */
+          float ndv = abs(dot(V, N));
+          float edge = 1.0 - smoothstep(0.0, 0.12, ndv);
+          float a = rim * edge * lit * (0.55 + 0.45 * streak) * 1.6;
           if (a < 0.004) discard;
           gl_FragColor = vec4(uAtmoColor * a, a);
         }
@@ -606,6 +650,14 @@
       sunDir,
       ground,
       clouds,
+
+      /* 出生机位：正对晨昏线、略偏亮面的那一侧。
+         这个方向与 sunDir 配合，使晨昏线在画面里呈约 42° 的斜线。 */
+      /* 中纬度机位：Y 从 0.848 降到 0.30。
+         原机位几乎正对北极，整块冰盖直面镜头，看起来像一片灰雾。 */
+      camOffset: new THREE.Vector3(-0.520, 0.300, -0.800).normalize(),
+      camDistMul: 2.75,
+
       update(dt, time, camera) {
         groundMat.uniforms.uTime.value = time;
         cloudMat.uniforms.uTime.value = time;

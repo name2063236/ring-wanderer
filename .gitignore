@@ -28,6 +28,9 @@ shots/_tmp/
 compress-shots.py
 fix-refs.js
 
+# 本地备份（开发时手动存档，不进版本库）
+backup/
+
 # 上传用的临时压缩包
 *.zip
 

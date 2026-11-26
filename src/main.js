@@ -410,12 +410,11 @@
         }
 
         // 相机拉回合适的观察距离（不同世界尺度不同）
-        if (worldId === 'blackhole' && target.camOffset && target.camDistMul) {
-          // 黑洞用自己推荐的机位：低仰角，接近侧视，才看得到盘的环绕拱弧
+        if (target.camOffset && target.camDistMul) {
+          // 世界自带推荐机位（黑洞的低仰角侧视、地球的晨昏线视角）
           camera.position
             .copy(target.camOffset)
             .multiplyScalar(target.camDistMul * R);
-          // 视线略高于盘面中心，让黑球位于画面中央偏上
           player.lookAt(new THREE.Vector3(0, R * 0.02, 0));
         } else {
           const distMul = worldId === 'belt' ? 3.8 : 3.2;
@@ -1083,8 +1082,14 @@
       gameplay.update(dt, time, camera, st.speed, onGameEvent);
     }
 
-    // 环带体积雾（内部会驱动雾密度、冰粒、能见度）
-    ringfog.update(dt, time, camera);
+    // 环带体积雾只属于土星世界。
+    // 黑洞场景里相机就在盘内，若不屏蔽，会把盘面误判成星环平面，
+    // 叠加出大片异常暗区（表现为"脚下的黑色空洞"）。
+    if (currentWorldId === 'saturn') {
+      ringfog.update(dt, time, camera);
+    } else {
+      ringfog.hide();
+    }
 
     // 遗物：缓慢公转 + 靠近即被"发现"
     if (relic) {
@@ -1159,6 +1164,17 @@
     el.intro.classList.add('hidden');
     el.reticle.style.opacity = '1';
     el.start.textContent = '（调试中，点击亦可锁定视角）';
+    // 仅用于自动化截图：直接给出速度，不锁定鼠标指针
+    player.state.enabled = true;
+
+    // 先切换世界（onSwap 会重设相机位置）
+    const worldParam = params.get('world');
+    if (worldParam && otherWorlds[worldParam]) {
+      warp.start(worldParam);
+      for (let i = 0; i < 600 && warp.active; i++) warp.update(1 / 60, i / 60);
+    }
+
+    // 再用 pos/look 覆盖机位（顺序很重要，否则会被 onSwap 覆盖掉）
     if (params.get('pos')) {
       const [x, y, z] = params.get('pos').split(',').map(Number);
       camera.position.set(x, y, z);
@@ -1170,16 +1186,6 @@
     if (params.get('fov')) {
       camera.fov = Number(params.get('fov'));
       camera.updateProjectionMatrix();
-    }
-    // 仅用于自动化截图：直接给出速度，不锁定鼠标指针
-    player.state.enabled = true;
-
-    // 直接跳到某个星球（跳过跃迁动画，仅用于取景截图）
-    const worldParam = params.get('world');
-    if (worldParam && otherWorlds[worldParam]) {
-      // 走一遍 onSwap 的同一套逻辑
-      warp.start(worldParam);
-      for (let i = 0; i < 600 && warp.active; i++) warp.update(1 / 60, i / 60);
     }
   }
 
@@ -1380,15 +1386,32 @@
       check('连续尖峰不会累积失控', acc < 2,
         `20 次异常增量累计 ${acc.toFixed(1)}°`);
 
-      // 大幅但合理的快速甩动（一帧内多个正常事件）仍应正常生效
+      // 超限即丢弃：顺时针甩动后，视角不会在"鼠标已停"的下一帧继续转
       player.lookAt(new THREE.Vector3(0, 0, 0));
       const b4 = player.getForward(new THREE.Vector3());
       for (let i = 0; i < 4; i++) player.testInput(null, { dx: 180, dy: 0 });
       player.update(1 / 60, 0);
       const a4 = player.getForward(new THREE.Vector3());
       const flick = (b4.angleTo(a4) * 180) / Math.PI;
-      check('快速甩动仍正常生效', flick > 40,
-        `4×180px 转了 ${flick.toFixed(0)}°（未被误杀）`);
+
+      player.update(1 / 60, 0);
+      const a5 = player.getForward(new THREE.Vector3());
+      const drift = (a4.angleTo(a5) * 180) / Math.PI;
+
+      check('单帧转角受控（不瞬移）', flick < 40,
+        `首帧 ${flick.toFixed(0)}°（上限约 34°）`);
+      check('超限部分丢弃，鼠标停了视角就停', drift < 0.5,
+        `下一帧额外转了 ${drift.toFixed(2)}°（无延迟补转）`);
+
+      // 异常长帧（卡顿/切世界）后不应把积压位移一次性释放
+      player.lookAt(new THREE.Vector3(0, 0, 0));
+      const b6 = player.getForward(new THREE.Vector3());
+      player.testInput(null, { dx: 200, dy: 120 });
+      player.update(0.4, 0);                       // 模拟 0.4s 长帧
+      const a6 = player.getForward(new THREE.Vector3());
+      const longFrame = (b6.angleTo(a6) * 180) / Math.PI;
+      check('长帧后不猛跳', longFrame < 1,
+        `0.4s 长帧仅转 ${longFrame.toFixed(2)}°（累积已作废）`);
     }
 
     // 11) 土星穿透保护
